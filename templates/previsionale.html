@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Mappa Previsionale</title>
+<link href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" rel="stylesheet"/>
+<style>
+    html, body { margin:0; padding:0; height:100%; overflow:hidden; font-family:sans-serif; }
+    #map { position:absolute; top:0; bottom:0; left:0; right:0; }
+
+    /* MODIFICA: Spostato a sinistra per non sovrapporsi allo zoom */
+    #viewSwitch {
+      position:absolute; top:10px; left:60px; z-index:1000;
+      display: flex; border-radius: 4px; overflow: hidden;
+      border: 1px solid #999;
+    }
+    /* FINE MODIFICA */
+
+    #viewSwitch button {
+      background: #fff; color: #333; border: none; padding: 8px 16px;
+      cursor: pointer; font-size: 14px;
+    }
+    #viewSwitch button.active { background: #007bff; color: #fff; font-weight: bold; }
+    #sidebar {
+      position:absolute; top:10px; right:10px; width:260px;
+      background:rgba(255,255,255,0.9); padding:12px; border-radius:6px;
+      box-shadow:0 0 8px rgba(0,0,0,0.2); z-index:1000;
+    }
+    #sidebar label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 14px; margin-top: 10px;}
+    #sidebar select, #sidebar input { width:100%; box-sizing: border-box; margin-bottom:10px; padding:8px; font-size:14px; }
+    #segmentList {
+      display: none; position:absolute; top:215px; right:10px; width:260px;
+      max-height:200px; overflow-y:auto; background:rgba(255,255,255,0.9);
+      padding:8px; border-radius:6px; box-shadow:0 0 8px rgba(0,0,0,0.2);
+      font-size:12px; z-index:1000;
+    }
+    #segmentList .item { padding:4px 6px; cursor:pointer; border-bottom:1px solid #ddd; }
+    #segmentList .item:hover { background:#007bff; color:#fff; }
+    #legend {
+      position:absolute; bottom:120px; left:10px; z-index:1000;
+      background:rgba(255,255,255,0.9); padding:10px; border-radius:6px;
+      font-size:14px; line-height: 1.5; box-shadow:0 0 8px rgba(0,0,0,0.2);
+      max-height:260px; overflow-y:auto;
+    }
+    #legend .title { font-weight:bold; margin-bottom:6px; border-bottom: 1px solid #ccc; padding-bottom: 5px;}
+    #legend .step { display:flex; align-items:center; margin-bottom:4px; }
+    #legend .color-box { width:20px; height:14px; margin-right:8px; border:1px solid #ccc; flex-shrink: 0; }
+    #timeline-container {
+      position:absolute; bottom:0; left:0; right:0;
+      height: 100px; background:rgba(0,0,0,0.75); color:#fff; z-index:999;
+      box-sizing:border-box; padding:8px 20px;
+      display:flex; flex-direction:column; justify-content:center;
+    }
+    #dayLabels { display:flex; width:100%; justify-content:space-around; margin-bottom:10px; }
+    #dayLabels div {
+      flex:1; text-align:center; cursor:pointer; padding:2px 0;
+      font-size:14px; font-weight:bold; color:#eee;
+      border-right:1px solid rgba(255,255,255,0.2);
+    }
+    #dayLabels div:last-child { border-right: none; }
+    #dayLabels div.active { color:orange; }
+    #slider-wrapper { display: flex; align-items: center; width: 100%; }
+    #playPauseBtn {
+        background: transparent; border: 2px solid #fff; color: #fff;
+        border-radius: 50%; width: 40px; height: 40px; font-size: 18px;
+        cursor: pointer; margin-right: 15px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        transition: background 0.2s;
+    }
+    #playPauseBtn:hover { background: rgba(255,255,255,0.2); }
+    #timeSlider {
+      -webkit-appearance:none; width:100%; height:8px;
+      background:rgba(255,255,255,0.3); border-radius:4px;
+    }
+    #timeSlider::-webkit-slider-thumb {
+      -webkit-appearance:none; width:18px; height:18px; background:orange;
+      border-radius:50%; cursor:pointer; border: 2px solid #fff;
+    }
+    #currentTime {
+        position: absolute; bottom: 5px; left: 50%;
+        transform: translateX(-50%); background: rgba(0,0,0,0.5);
+        padding: 2px 8px; border-radius: 4px; font-size: 12px;
+    }
+    #loading {
+      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+      background:rgba(255,255,255,0.9); padding:12px 20px; border-radius:6px;
+      box-shadow:0 0 8px rgba(0,0,0,0.3); font-size:16px; display:none; z-index:1001;
+    }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="viewSwitch">
+  <button id="btnStorico" onclick="location.href='/storico'">Storico</button>
+  <button id="btnPrevisionale" class="active">Previsionale</button>
+</div>
+<div id="sidebar">
+    <label for="stradaSelect">Strada</label>
+    <select id="stradaSelect">
+        <option value="A90">A90</option>
+        <option value="SS51">SS51</option>
+        <option value="SS675">SS675</option>
+    </select>
+    <label for="variabileSelect">Variabile Meteorologica</label>
+    <select id="variabileSelect">
+        <option value="temperature">Temperatura (°C)</option>
+        <option value="windspeed">Velocità del Vento (km/h)</option>
+        <option value="precipitation">Precipitazione (mm)</option>
+    </select>
+    <label for="kmSearch">Ricerca per Chilometrica</label>
+    <input id="kmSearch" placeholder="Es. km 1+982" type="text"/>
+</div>
+<div id="segmentList"></div>
+<div id="legend"></div>
+<div id="timeline-container">
+    <div id="dayLabels"></div>
+    <div id="slider-wrapper">
+        <button id="playPauseBtn">▶</button>
+        <input id="timeSlider" type="range" min="0" max="0" value="0">
+    </div>
+    <div id="currentTime">--</div>
+</div>
+<div id="loading">Caricamento in corso...</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    // Lo script JavaScript rimane invariato
+    const scales = {
+        temperature: {
+            unit: '°C',
+            steps: [
+                { value: -5, color: 'rgb(102, 0, 153)', label: 'Gelo Intenso (< -5°C)' },
+                { value: 0,  color: 'rgb(0, 51, 204)', label: 'Gelo Moderato (-5°C - 0°C)' },
+                { value: 10, color: 'rgb(51, 153, 255)', label: 'Freddo (0°C - 10°C)' },
+                { value: 25, color: 'rgb(0, 204, 0)', label: 'Normale (10°C - 25°C)' },
+                { value: 35, color: 'rgb(255, 190, 0)', label: 'Caldo (25°C - 35°C)' },
+                { value: Infinity, color: 'rgb(204, 0, 0)', label: 'Molto Caldo (> 35°C)' }
+            ]
+        },
+        windspeed: {
+            unit: 'km/h',
+            steps: [
+                { value: 20, color: 'rgb(204, 229, 255)', label: 'Assente/Debole (0-20 km/h)' },
+                { value: 40, color: 'rgb(153, 255, 153)', label: 'Moderato (20-40 km/h)' },
+                { value: 60, color: 'rgb(255, 255, 102)', label: 'Sostenuto (40-60 km/h)' },
+                { value: 80, color: 'rgb(255, 153, 51)', label: 'Forte (60-80 km/h)' },
+                { value: Infinity, color: 'rgb(255, 51, 51)', label: 'Molto Forte (> 80 km/h)' }
+            ]
+        },
+        precipitation: {
+            unit: 'mm',
+            steps: [
+                { value: 0.2, color: 'rgb(173, 216, 230)', label: 'Assente (< 0.2 mm)' },
+                { value: 2.0, color: 'rgb(0, 0, 255)', label: 'Debole (0.2-2.0 mm)' },
+                { value: 10.0, color: 'rgb(0, 128, 0)', label: 'Moderato (2.0-10.0 mm)' },
+                { value: 25.0, color: 'rgb(255, 255, 0)', label: 'Intenso (10.0-25.0 mm)' },
+                { value: 50.0, color: 'rgb(255, 165, 0)', label: 'Forte (25.0-50.0 mm)' },
+                { value: Infinity, color: 'rgb(255, 0, 0)', label: 'Molto Forte (> 50.0 mm)' }
+            ]
+        }
+    };
+    const bounds = { A90:[[41.8,12.3],[42.0,12.6]], SS51:[[46.3,12.2],[46.7,12.4]], SS675:[[42.4,12.0],[42.6,12.3]] };
+    const canvasRenderer = L.canvas({ padding: 0.5 });
+    const map = L.map('map', { preferCanvas: true, renderer: canvasRenderer }).setView([42, 12.5], 7);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
+    let allSegments = [], polylines = {}, apiData = {}, times = [];
+    let currentVar = 'temperature', currentStrada = 'A90';
+    let isPlaying = false, playInterval = null;
+    const loadingEl = document.getElementById('loading');
+    const stradaSelect = document.getElementById('stradaSelect');
+    const variabileSelect = document.getElementById('variabileSelect');
+    const kmSearch = document.getElementById('kmSearch');
+    const segmentListContainer = document.getElementById('segmentList');
+    const playPauseBtn = document.getElementById('playPauseBtn');
+    const timeSlider = document.getElementById('timeSlider');
+    function debounce(fn, ms) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn.apply(this, args), ms); }; }
+    function renderLegend() {
+        const lg = document.getElementById('legend');
+        lg.innerHTML = `<div class="title">${variabileSelect.selectedOptions[0].text}</div>`;
+        scales[currentVar].steps.forEach(step => {
+            const row = document.createElement('div');
+            row.className = 'step';
+            row.innerHTML = `<div class="color-box" style="background:${step.color}"></div> ${step.label}`;
+            lg.appendChild(row);
+        });
+    }
+    function pausePlayback() { if (!isPlaying) return; isPlaying = false; clearInterval(playInterval); playPauseBtn.innerHTML = '▶'; }
+    function startPlayback() {
+        if (isPlaying || times.length === 0) return;
+        isPlaying = true; playPauseBtn.innerHTML = '❚❚';
+        playInterval = setInterval(() => {
+            let currentIndex = +timeSlider.value;
+            let nextIndex = currentIndex + 1;
+            if (nextIndex >= times.length) { nextIndex = 0; }
+            updateMap(nextIndex);
+        }, 1000);
+    }
+    async function fetchSegmentsData() {
+        if (allSegments.length > 0) return;
+        try { const res = await fetch('/static/jsons/tratti_strada_allineati.json'); allSegments = await res.json(); }
+        catch(e) { console.error("Impossibile caricare i tratti stradali", e); }
+    }
+    function displaySegments() {
+        Object.values(polylines).forEach(p => map.removeLayer(p));
+        polylines = {};
+        segmentListContainer.innerHTML = '';
+        const filterText = kmSearch.value.toLowerCase();
+        segmentListContainer.style.display = filterText.length > 0 ? 'block' : 'none';
+        allSegments.filter(t => t.nome.includes(currentStrada) && t.nome.toLowerCase().includes(filterText))
+            .forEach(tratto => {
+                const coords = tratto.punti.map(p => [p.lat, p.lon]);
+                const poly = L.polyline(coords, { renderer: canvasRenderer, color: '#888', weight: 4 }).addTo(map).bindTooltip(tratto.nome, { direction: 'top', sticky: true });
+                polylines[tratto.nome] = poly;
+                const div = document.createElement('div');
+                div.className = 'item'; div.textContent = tratto.nome;
+                div.onclick = () => map.fitBounds(poly.getBounds(), {padding: [20,20]});
+                segmentListContainer.appendChild(div);
+            });
+        if (filterText === '') { map.fitBounds(bounds[currentStrada]); }
+    }
+    async function loadData() {
+        pausePlayback(); loadingEl.style.display = 'block';
+        const url = `/api/previsionale_dato?variabile=${currentVar}&strada=${encodeURIComponent(currentStrada)}`;
+        try {
+            const res = await fetch(url);
+            const json = await res.json();
+            times = json.times || [];
+            apiData = json.data || {};
+            renderTimeline();
+            updateMap(0);
+        } catch (error) { console.error(`Errore caricamento dati:`, error); }
+        finally { loadingEl.style.display = 'none'; }
+    }
+    function renderTimeline() {
+        const dayBar = document.getElementById('dayLabels');
+        dayBar.innerHTML = '';
+        if (times.length === 0) {
+            timeSlider.style.display = 'none';
+            dayBar.innerHTML = "<div style='text-align:center; width:100%;'>Nessun dato temporale</div>";
+            playPauseBtn.disabled = true;
+            return;
+        }
+        playPauseBtn.disabled = false; timeSlider.style.display = 'block';
+        const days = [...new Set(times.map(t => t.split('T')[0]))];
+        days.forEach(d => {
+            const dt = new Date(d);
+            const div = document.createElement('div');
+            div.textContent = dt.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric' });
+            div.onclick = () => { pausePlayback(); const idx = times.findIndex(x => x.startsWith(d)); if (idx >= 0) updateMap(idx); };
+            dayBar.appendChild(div);
+        });
+        timeSlider.min = 0;
+        timeSlider.max = times.length > 0 ? times.length - 1 : 0;
+        timeSlider.value = 0;
+    }
+    function updateMap(idx) {
+        if (!times || !times[idx]) return;
+        timeSlider.value = idx;
+        const dt = new Date(times[idx]);
+        document.getElementById('currentTime').textContent = dt.toLocaleString('it-IT', {dateStyle: 'short', timeStyle: 'short'});
+        Object.keys(polylines).forEach(key => {
+            const poly = polylines[key]; if (!poly) return;
+            const record = (apiData[key] || []).find(d => d.time === times[idx]);
+            const val = record ? record.valore : null;
+            poly.setStyle({ color: val != null ? getColorForValue(val) : '#ccc' });
+            const varLabel = variabileSelect.selectedOptions[0].text.split(' (')[0];
+            const unit = scales[currentVar].unit;
+            poly.setTooltipContent(`<b>${key}</b><br>${varLabel}: ${val != null ? Number(val).toFixed(1) + ' ' + unit : 'N/D'}`);
+        });
+    }
+    function getColorForValue(v) {
+        const sc = scales[currentVar];
+        for (const step of sc.steps) { if (v < step.value) return step.color; }
+        return sc.steps[sc.steps.length - 1].color;
+    }
+    playPauseBtn.onclick = () => { isPlaying ? pausePlayback() : startPlayback(); };
+    timeSlider.oninput = debounce(e => { pausePlayback(); updateMap(+e.target.value); }, 10);
+    stradaSelect.onchange = async () => { pausePlayback(); currentStrada = stradaSelect.value; kmSearch.value = ''; displaySegments(); await loadData(); };
+    variabileSelect.onchange = async () => { pausePlayback(); currentVar = variabileSelect.value; renderLegend(); await loadData(); };
+    kmSearch.addEventListener('input', debounce(displaySegments, 300));
+    (async () => {
+        await fetchSegmentsData();
+        displaySegments();
+        renderLegend();
+        await loadData();
+    })();
+</script>
+</body>
+</html>

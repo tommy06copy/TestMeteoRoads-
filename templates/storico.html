@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Mappa Storico</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    html, body { margin:0; padding:0; height:100%; overflow:hidden; font-family:sans-serif; }
+    #map { position:absolute; top:0; bottom:0; left:0; right:0; }
+
+    /* MODIFICA: Spostato a sinistra per non sovrapporsi allo zoom */
+    #viewSwitch {
+      position:absolute; top:10px; left:60px; z-index:1000;
+      display: flex; border-radius: 4px; overflow: hidden;
+      border: 1px solid #999;
+    }
+    /* FINE MODIFICA */
+
+    #viewSwitch button {
+      background: #fff; color: #333; border: none; padding: 8px 16px;
+      cursor: pointer; font-size: 14px;
+    }
+    #viewSwitch button.active {
+      background: #007bff; color: #fff; font-weight: bold;
+    }
+    #sidebar {
+      position:absolute; top:10px; right:10px; width:260px;
+      background:rgba(255,255,255,0.9); padding:12px; border-radius:6px;
+      box-shadow:0 0 8px rgba(0,0,0,0.2); z-index:1000;
+    }
+    #sidebar label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 14px; margin-top: 10px;}
+    #sidebar select, #sidebar input, #sidebar button {
+      width:100%; box-sizing: border-box; margin-top: 4px; padding:8px; font-size:14px;
+      border-radius: 4px; border: 1px solid #ccc;
+    }
+    #sidebar #applyBtn { background: #007bff; color: white; border: none; cursor: pointer; margin-top: 15px; font-weight: bold;}
+    #btnGrafici {
+        display:none;
+        margin-top: 10px;
+    }
+    #btnGrafici button {
+        background:#28a745;
+        color:white;
+        border:none;
+        font-weight: bold;
+        cursor: pointer;
+        width: 100%;
+        transition: background-color 0.2s;
+    }
+    #btnGrafici button:hover {
+        background: #218838;
+    }
+    #legend {
+      position:absolute; bottom:120px; left:10px; z-index:1000;
+      background:rgba(255,255,255,0.9); padding:10px; border-radius:6px;
+      font-size:14px; line-height: 1.5; box-shadow:0 0 8px rgba(0,0,0,0.2);
+      max-height:260px; overflow-y:auto;
+    }
+    #legend .title { font-weight:bold; margin-bottom:6px; border-bottom: 1px solid #ccc; padding-bottom: 5px;}
+    #legend .step { display:flex; align-items:center; margin-bottom:4px; }
+    #legend .color-box { width:20px; height:14px; margin-right:8px; border:1px solid #ccc; flex-shrink: 0; }
+    #timeline-container {
+      position:absolute; bottom:0; left:0; right:0;
+      height: 100px; background:rgba(0,0,0,0.75); color:#fff; z-index:999;
+      box-sizing:border-box; padding:8px 20px;
+      display:flex; flex-direction:column; justify-content:center;
+    }
+    #dayLabels { display:flex; width:100%; justify-content:space-around; margin-bottom:10px; }
+    #dayLabels div {
+      flex:1; text-align:center; cursor:pointer; padding:2px 0;
+      font-size:14px; font-weight:bold; color:#eee;
+      border-right:1px solid rgba(255,255,255,0.2);
+    }
+    #dayLabels div:last-child { border-right: none; }
+    #dayLabels div.active { color:orange; }
+    #slider-wrapper { display: flex; align-items: center; width: 100%; }
+    #playPauseBtn {
+        background: transparent; border: 2px solid #fff; color: #fff;
+        border-radius: 50%; width: 40px; height: 40px; font-size: 18px;
+        cursor: pointer; margin-right: 15px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        transition: background 0.2s;
+    }
+    #playPauseBtn:hover { background: rgba(255,255,255,0.2); }
+    #timeSlider {
+      -webkit-appearance:none; width:100%; height:8px;
+      background:rgba(255,255,255,0.3); border-radius:4px;
+    }
+    #timeSlider::-webkit-slider-thumb {
+      -webkit-appearance:none; width:18px; height:18px; background:orange;
+      border-radius:50%; cursor:pointer; border: 2px solid #fff;
+    }
+    #currentTime {
+        position: absolute; bottom: 5px; left: 50%;
+        transform: translateX(-50%); background: rgba(0,0,0,0.5);
+        padding: 2px 8px; border-radius: 4px; font-size: 12px;
+    }
+    #loading {
+      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+      background:rgba(255,255,255,0.9); padding:12px 20px; border-radius:6px;
+      box-shadow:0 0 8px rgba(0,0,0,0.3); font-size:16px; display:none; z-index:1001;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="viewSwitch">
+    <button id="btnStorico" class="active">Storico</button>
+    <button id="btnPrevisionale" onclick="location.href='/previsionale'">Previsionale</button>
+  </div>
+
+  <div id="sidebar">
+    <label for="stradaSelect">Strada</label>
+    <select id="stradaSelect">
+      <option value="A90">A90</option>
+      <option value="SS51">SS51</option>
+      <option value="SS675">SS675</option>
+    </select>
+    <label for="variabileSelect">Variabile</label>
+    <select id="variabileSelect">
+      <option value="temperature">Temperatura (°C)</option>
+      <option value="windspeed">Velocità del Vento (km/h)</option>
+      <option value="precipitation">Precipitazione (mm)</option>
+      <option value="precipitation_probability">Probabilità (%)</option>
+    </select>
+    <label for="startDate">Data inizio</label>
+    <input type="date" id="startDate"/>
+    <label for="endDate">Data fine</label>
+    <input type="date" id="endDate"/>
+    <label for="trattoSelect">Tratto specifico (opzionale)</label>
+    <select id="trattoSelect">
+      <option value="">-- tutti i tratti --</option>
+    </select>
+    <button id="applyBtn">Carica Dati Storici</button>
+    <div id="btnGrafici">
+      <button onclick="visualizzaGrafici()">Visualizza grafici</button>
+    </div>
+  </div>
+
+  <div id="legend"></div>
+
+  <div id="timeline-container">
+    <div id="dayLabels"></div>
+    <div id="slider-wrapper">
+        <button id="playPauseBtn">▶</button>
+        <input id="timeSlider" type="range" min="0" max="0" value="0">
+    </div>
+    <div id="currentTime">--</div>
+  </div>
+
+  <div id="loading">Caricamento in corso…</div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // Lo script JavaScript rimane invariato
+    const scales = {
+        temperature: {
+            unit: '°C',
+            steps: [ { value: -5, color: 'rgb(102, 0, 153)', label: 'Gelo Intenso (< -5°C)' }, { value: 0,  color: 'rgb(0, 51, 204)', label: 'Gelo Moderato (-5°C - 0°C)' }, { value: 10, color: 'rgb(51, 153, 255)', label: 'Freddo (0°C - 10°C)' }, { value: 25, color: 'rgb(0, 204, 0)', label: 'Normale (10°C - 25°C)' }, { value: 35, color: 'rgb(255, 190, 0)', label: 'Caldo (25°C - 35°C)' }, { value: Infinity, color: 'rgb(204, 0, 0)', label: 'Molto Caldo (> 35°C)' } ]
+        },
+        windspeed: {
+            unit: 'km/h',
+            steps: [ { value: 20, color: 'rgb(204, 229, 255)', label: 'Assente/Debole (0-20 km/h)' }, { value: 40, color: 'rgb(153, 255, 153)', label: 'Moderato (20-40 km/h)' }, { value: 60, color: 'rgb(255, 255, 102)', label: 'Sostenuto (40-60 km/h)' }, { value: 80, color: 'rgb(255, 153, 51)', label: 'Forte (60-80 km/h)' }, { value: Infinity, color: 'rgb(255, 51, 51)', label: 'Molto Forte (> 80 km/h)' } ]
+        },
+        precipitation: {
+            unit: 'mm',
+            steps: [ { value: 0.2, color: 'rgb(173, 216, 230)', label: 'Assente (< 0.2 mm)' }, { value: 2.0, color: 'rgb(0, 0, 255)', label: 'Debole (0.2-2.0 mm)' }, { value: 10.0, color: 'rgb(0, 128, 0)', label: 'Moderato (2.0-10.0 mm)' }, { value: 25.0, color: 'rgb(255, 255, 0)', label: 'Intenso (10.0-25.0 mm)' }, { value: 50.0, color: 'rgb(255, 165, 0)', label: 'Forte (25.0-50.0 mm)' }, { value: Infinity, color: 'rgb(255, 0, 0)', label: 'Molto Forte (> 50.0 mm)' } ]
+        },
+        precipitation_probability: {
+            unit:'%',
+            steps:[ {value: 20, color: '#ffffe5', label: '0-20%'}, {value: 40, color: '#fff7bc', label: '20-40%'}, {value: 60, color: '#fee391', label: '40-60%'}, {value: 80, color: '#fec44f', label: '60-80%'}, {value: 100, color: '#fe9929', label: '80-100%'}, {value: Infinity, color: '#cc4c02', label: '> 100%'} ]
+        }
+    };
+    const bounds = { A90:[[41.8,12.3],[42.0,12.6]], SS51:[[46.3,12.2],[46.7,12.4]], SS675:[[42.4,12.0],[42.6,12.3]] };
+    const renderer = L.canvas({ padding:0.5 });
+    const map = L.map('map',{ preferCanvas:true, renderer }).setView([42,12.5],7);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap contributors' }).addTo(map);
+
+    let segmentsData=null, polylines={}, times=[], historicData={}, selectedTratto=null;
+    let currentStrada='A90', currentVar='temperature';
+    let isPlaying = false, playInterval = null;
+
+    const stradaSelect = document.getElementById('stradaSelect');
+    const variabileSelect = document.getElementById('variabileSelect');
+    const playPauseBtn = document.getElementById('playPauseBtn');
+    const timeSlider = document.getElementById('timeSlider');
+    const trattoSelect = document.getElementById('trattoSelect');
+
+    function debounce(fn, ms) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn.apply(this, args), ms); }; }
+
+    async function fetchSegments(){
+      if(!segmentsData){ segmentsData = await fetch('/static/jsons/tratti_strada_allineati.json').then(r=>r.json()); }
+    }
+
+    function drawSegments(){
+      Object.values(polylines).forEach(p=>map.removeLayer(p));
+      polylines={};
+      segmentsData.forEach(t=>{
+        if(!t.nome.includes(currentStrada)) return;
+        const poly = L.polyline(t.punti.map(p=>[p.lat,p.lon]),{ renderer, color:'#888', weight:4 })
+          .addTo(map).bindTooltip(t.nome,{direction:'top',sticky:true})
+          .on('click',() => selectTratto(t.nome, poly));
+        polylines[t.nome]=poly;
+      });
+      map.fitBounds(bounds[currentStrada]);
+      populateTrattoSelect();
+      selectTratto(null, null);
+    }
+
+    function populateTrattoSelect(){
+      trattoSelect.innerHTML='<option value="">-- tutti i tratti --</option>';
+      segmentsData.forEach(t=>{ if(t.nome.includes(currentStrada)){ trattoSelect.add(new Option(t.nome,t.nome)); } });
+    }
+
+    function selectTratto(nome, poly){
+        if(!nome) { selectedTratto = null; document.getElementById('btnGrafici').style.display = 'none'; return; };
+        selectedTratto = nome; trattoSelect.value = nome;
+        map.fitBounds(poly.getBounds(),{padding:[20,20]});
+        document.getElementById('btnGrafici').style.display='block';
+    }
+
+    async function loadHistoric(){
+      pausePlayback();
+      const sd=document.getElementById('startDate').value;
+      const ed=document.getElementById('endDate').value;
+      if(!sd||!ed) return alert('Per favore, inserisci un intervallo di date valido.');
+      currentVar = variabileSelect.value;
+      document.getElementById('loading').style.display='block';
+      try {
+          const res = await fetch(`/api/historico_orario?strada=${encodeURIComponent(currentStrada)}&variabile=${currentVar}&start_date=${sd}&end_date=${ed}`);
+          const js = await res.json();
+          times=js.times||[]; historicData=js.data||{};
+          renderLegend(); renderTimeline(); updateMap(0);
+      } catch (e) { console.error("Errore caricamento dati storici", e); }
+      finally { document.getElementById('loading').style.display='none'; }
+    }
+
+    function renderLegend() {
+        const lg = document.getElementById('legend');
+        lg.innerHTML = `<div class="title">${variabileSelect.selectedOptions[0].text}</div>`;
+        scales[currentVar].steps.forEach(step => {
+            const row = document.createElement('div');
+            row.className = 'step';
+            row.innerHTML = `<div class="color-box" style="background:${step.color}"></div> ${step.label}`;
+            lg.appendChild(row);
+        });
+    }
+
+    function renderTimeline() {
+        const dayBar = document.getElementById('dayLabels');
+        dayBar.innerHTML = '';
+        if (times.length === 0) {
+            timeSlider.style.display = 'none';
+            dayBar.innerHTML = "<div style='text-align:center; width:100%;'>Nessun dato per l'intervallo</div>";
+            playPauseBtn.disabled = true; document.getElementById('currentTime').textContent = "--";
+            return;
+        }
+        playPauseBtn.disabled = false; timeSlider.style.display = 'block';
+        const days = [...new Set(times.map(t => t.split('T')[0]))];
+        days.forEach(d => {
+            const dt = new Date(d);
+            const div = document.createElement('div');
+            div.textContent = dt.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric' });
+            div.onclick = () => { pausePlayback(); const idx = times.findIndex(x => x.startsWith(d)); if (idx >= 0) updateMap(idx); };
+            dayBar.appendChild(div);
+        });
+        timeSlider.min = 0; timeSlider.max = times.length > 0 ? times.length - 1 : 0;
+        timeSlider.value = 0;
+    }
+
+    function updateMap(idx) {
+        if (!times || !times[idx]) return;
+        timeSlider.value = idx;
+        const dt = new Date(times[idx]);
+        document.getElementById('currentTime').textContent = dt.toLocaleString('it-IT', {dateStyle: 'short', timeStyle: 'short'});
+        Object.entries(polylines).forEach(([nome, poly])=>{
+            const record = (historicData[nome] || []).find(r => r.time === times[idx]);
+            const val = record ? record.valore : null;
+            poly.setStyle({ color: val != null ? getColorForValue(val) : '#ccc' });
+            poly.setTooltipContent(`<b>${nome}</b><br>${variabileSelect.selectedOptions[0].text.split(' (')[0]}: ${val != null ? Number(val).toFixed(1) : 'N/D'}`);
+        });
+    }
+
+    function getColorForValue(v) {
+        const sc = scales[currentVar];
+        for (const step of sc.steps) { if (v < step.value) return step.color; }
+        return sc.steps[sc.steps.length - 1].color;
+    }
+
+    function pausePlayback() { if (!isPlaying) return; isPlaying = false; clearInterval(playInterval); playPauseBtn.innerHTML = '▶'; }
+    function startPlayback() {
+        if (isPlaying || times.length === 0) return;
+        isPlaying = true; playPauseBtn.innerHTML = '❚❚';
+        playInterval = setInterval(() => {
+            let currentIndex = +timeSlider.value;
+            let nextIndex = currentIndex + 1;
+            if (nextIndex >= times.length) { nextIndex = 0; }
+            updateMap(nextIndex);
+        }, 1000);
+    }
+
+    function visualizzaGrafici(){
+      const sd=document.getElementById('startDate').value;
+      const ed=document.getElementById('endDate').value;
+      if(!selectedTratto) return alert('Seleziona prima un tratto specifico dalla mappa o dal menù a tendina.');
+      window.open(`/grafico.html?strada=${encodeURIComponent(currentStrada)}&tratto=${encodeURIComponent(selectedTratto)}&variabile=${encodeURIComponent(currentVar)}&start_date=${encodeURIComponent(sd)}&end_date=${encodeURIComponent(ed)}`);
+    }
+
+    document.getElementById('applyBtn').onclick = loadHistoric;
+    stradaSelect.onchange = async function(){ currentStrada=this.value; await fetchSegments(); drawSegments(); };
+    trattoSelect.onchange = e => selectTratto(e.target.value, polylines[e.target.value]);
+    playPauseBtn.onclick = () => { isPlaying ? pausePlayback() : startPlayback(); };
+    timeSlider.oninput = debounce(e => { pausePlayback(); updateMap(+e.target.value); }, 10);
+
+    (async()=>{
+      const today = new Date(); const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(today.getDate() - 7);
+      document.getElementById('startDate').value = sevenDaysAgo.toISOString().split('T')[0];
+      document.getElementById('endDate').value = today.toISOString().split('T')[0];
+      await fetchSegments();
+      drawSegments();
+      renderLegend();
+    })();
+  </script>
+</body>
+</html>
