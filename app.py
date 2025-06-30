@@ -2,24 +2,14 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for
 import psycopg2
 import logging
 import os
+import re
 from datetime import datetime, timedelta
 
-app = Flask(__name__)
+app = Flask(__name__, static_url_path='/static')
 
-# Configura logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# === CONFIG DB ===
-DB_CONFIG = {
-    "dbname": "puntiautostrade",
-    "user": "postgres",
-    "password": "root",
-    "host": "localhost",
-    "port": 5432
-}
+DB_CONFIG = {"dbname": "puntiautostrade", "user": "postgres", "password": "root", "host": "localhost", "port": 5432}
 
 
 def get_connection():
@@ -27,153 +17,124 @@ def get_connection():
 
 
 def get_table_from_punto(strada):
-    if 'A90' in strada:
+    strada_upper = strada.upper()
+    if 'A90' in strada_upper:
         return 'datia90'
-    elif 'SS51' in strada:
+    elif 'SS51' in strada_upper:
         return 'datiss51'
-    elif 'SS675' in strada:
+    elif 'SS675' in strada_upper:
         return 'datiss675'
     else:
         return None
 
 
-# === ENDPOINT PER SERVIRE LE PAGINE HTML ===
+# Funzione di normalizzazione robusta per i nomi dei tratti
+def normalize_key(name):
+    if not name: return ""
+    return re.sub(r"[\s._()-]", "", name).lower()
+
+
 @app.route("/")
-def index():
-    # La pagina di default sarà il previsionale
-    return redirect(url_for('previsionale'))
+def index(): return redirect(url_for('previsionale'))
 
 
 @app.route("/previsionale")
-def previsionale():
-    # Serve il file previsionale.html dalla cartella /templates
-    return render_template("previsionale.html")
+def previsionale(): return render_template("previsionale.html")
 
 
 @app.route("/storico")
-def storico():
-    # Serve il file storico.html dalla cartella /templates
-    return render_template("storico.html")
+def storico(): return render_template("storico.html")
 
 
-# === API PER I DATI PREVISIONALI ===
 @app.route("/api/previsionale_dato")
 def previsionale_dato():
-    variabile = request.args.get('variabile')
-    strada = request.args.get('strada')
-    if not variabile or not strada:
-        return jsonify({"errore": "Parametri 'variabile' e 'strada' obbligatori"}), 400
-
+    variabile, strada = request.args.get('variabile'), request.args.get('strada')
+    if not variabile or not strada: return jsonify({"errore": "Parametri mancanti"}), 400
     tabella = get_table_from_punto(strada)
-    if not tabella:
-        return jsonify({"errore": f"Strada '{strada}' non supportata"}), 400
+    if not tabella: return jsonify({"errore": "Strada non supportata"}), 400
 
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            f"SELECT MAX(downloaded_at) FROM {tabella} WHERE tratto LIKE %s",
-            (f"{strada}%",)
-        )
+        cursor.execute(f"SELECT MAX(downloaded_at) FROM {tabella} WHERE tratto ILIKE %s", (f"%{strada}%",))
         start_dt = cursor.fetchone()[0]
+        if not start_dt: return jsonify({"times": [], "data": {}})
 
-        if not start_dt:
-            return jsonify({"times": [], "data": {}})
-
-        ultimo_scarico = start_dt
         end_dt = start_dt + timedelta(hours=72)
-
         cursor.execute(
-            f"""
-            SELECT tratto, time, {variabile}
-            FROM {tabella}
-            WHERE tratto LIKE %s
-              AND downloaded_at = %s
-              AND time >= %s AND time < %s
-            ORDER BY tratto, time
-            """,
-            (f"{strada}%", ultimo_scarico, start_dt, end_dt)
+            f"SELECT tratto, time, {variabile} FROM {tabella} WHERE tratto ILIKE %s AND downloaded_at = %s AND time >= %s AND time < %s ORDER BY tratto, time",
+            (f"%{strada}%", start_dt, start_dt, end_dt)
         )
         rows = cursor.fetchall()
 
-        risultati = {}
-        orari_set = set()
+        risultati, orari_set = {}, set()
         for tratto, time_val, misura in rows:
-            iso = time_val.isoformat()
-            orari_set.add(iso)
-            if tratto not in risultati:
-                risultati[tratto] = []
+            norm_tratto = normalize_key(tratto)
+            orari_set.add(time_val.isoformat())
+            if norm_tratto not in risultati: risultati[norm_tratto] = []
 
-            valore_finale = misura
-            if variabile == 'windspeed' and misura is not None:
-                valore_finale = misura * 3.6
+            valore_finale = misura * 3.6 if variabile == 'windspeed' and misura is not None else misura
+            # Includiamo il nome originale per il tooltip nel frontend
+            risultati[norm_tratto].append(
+                {"time": time_val.isoformat(), "valore": valore_finale, "tratto_originale": tratto})
 
-            risultati[tratto].append({"time": iso, "valore": valore_finale})
-
-        orari = sorted(list(orari_set))
-        return jsonify({"times": orari, "data": risultati})
-
+        return jsonify({"times": sorted(list(orari_set)), "data": risultati})
     except Exception as e:
         logging.error(f"Errore in previsionale_dato: {e}", exc_info=True)
         return jsonify({"errore": "Errore interno"}), 500
     finally:
-        cursor.close()
-        conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 
-# === API PER I DATI STORICI ===
 @app.route("/api/historico_orario")
 def storico_orario():
-    variabile = request.args.get('variabile')
-    strada = request.args.get('strada')
-    start_date = request.args.get('start_date')
-    end_date = request.args.get('end_date')
-    if not variabile or not strada or not start_date or not end_date:
-        return jsonify({"errore": "Parametri mancanti"}), 400
+    variabili, strada = request.args.getlist('variabile'), request.args.get('strada')
+    start_date, end_date = request.args.get('start_date'), request.args.get('end_date')
+    tratto_selezionato = request.args.get('tratto')
 
+    if not variabili or not strada or not tratto_selezionato: return jsonify({"errore": "Parametri mancanti"}), 400
     tabella = get_table_from_punto(strada)
-    if not tabella:
-        return jsonify({"errore": f"Strada '{strada}' non supportata"}), 400
+    if not tabella: return jsonify({"errore": "Strada non supportata"}), 400
 
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute(f"""
-            SELECT tratto, time, {variabile}
-            FROM {tabella}
-            WHERE tratto LIKE %s
-              AND time >= %s
-              AND time <= %s
-            ORDER BY time
-        """, (f"{strada}%", start_date, end_date + " 23:59:59"))
+        safe_columns = [col for col in variabili if
+                        col in ['temperature', 'windspeed', 'precipitation', 'precipitation_probability']]
+        if not safe_columns: return jsonify({"errore": "Variabili non valide"}), 400
+
+        select_clause = ", ".join(safe_columns)
+        query = f"SELECT time, {select_clause} FROM {tabella} WHERE tratto = %s"
+        params = [tratto_selezionato]
+
+        if start_date: query += " AND time >= %s"; params.append(start_date)
+        if end_date: query += " AND time <= %s"; params.append(end_date + " 23:59:59")
+        query += " ORDER BY time"
+
+        cursor.execute(query, tuple(params))
         rows = cursor.fetchall()
-        data = {}
-        times = set()
-        for tratto, t, val in rows:
-            iso = t.isoformat()
-            times.add(iso)
 
-            valore_finale = val
-            if variabile == 'windspeed' and val is not None:
-                valore_finale = val * 3.6
+        risultati = []
+        for row in rows:
+            record = {"time": row[0].isoformat()}
+            for i, col_name in enumerate(safe_columns):
+                val = row[i + 1]
+                record[col_name] = val * 3.6 if col_name == 'windspeed' and val is not None else val
+            risultati.append(record)
 
-            data.setdefault(tratto, []).append({"time": iso, "valore": valore_finale})
-
-        return jsonify({"times": sorted(times), "data": data})
+        return jsonify({"data": risultati})
     except Exception as e:
         logging.error(f"Errore in storico_orario: {e}", exc_info=True)
         return jsonify({"errore": "Errore interno"}), 500
     finally:
-        cursor.close()
-        conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 
-# Endpoint per la pagina dei grafici
 @app.route("/grafico.html")
-def grafico_page():
-    # Assumendo che esista un template 'grafico.html'
-    return render_template("grafico.html")
+def grafico_page(): return "Pagina dei grafici (da implementare)"
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port=5000)
